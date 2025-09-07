@@ -1,0 +1,49 @@
+{
+  "name": "enguio",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@heroui/theme": "^2.4.19",
+    "@heroui/tooltip": "^2.2.20",
+    "@next/swc-win32-x64-msvc": "^15.3.2",
+    "@nextui-org/react": "^2.6.11",
+    "axios": "^1.9.0",
+    "body-parser": "^2.2.0",
+    "chart.js": "^4.5.0",
+    "clsx": "^2.1.1",
+    "escpos": "^3.0.0-alpha.6",
+    "escpos-network": "^3.0.0-alpha.5",
+    "escpos-serialport": "^3.0.0-alpha.4",
+    "escpos-usb": "^3.0.0-alpha.4",
+    "express": "^5.1.0",
+    "framer-motion": "^11.18.2",
+    "icons": "^1.0.0",
+    "lucide-react": "^0.522.0",
+    "next": "^15.3.5",
+    "node-thermal-printer": "^4.5.0",
+    "printer": "^0.4.0",
+    "qs": "^6.14.0",
+    "react": "^19.1.0",
+    "react-chartjs-2": "^5.3.0",
+    "react-datepicker": "^8.4.0",
+    "react-dom": "^19.1.0",
+    "react-icons": "^5.5.0",
+    "react-popper-tooltip": "^4.4.2",
+    "react-toastify": "^11.0.5",
+    "tailwind-merge": "^3.3.1",
+    "toastify": "^2.0.1"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3",
+    "@tailwindcss/postcss": "^4",
+    "eslint": "^9",
+    "eslint-config-next": "15.3.1",
+    "tailwindcss": "^4.1.8"
+  }
+}

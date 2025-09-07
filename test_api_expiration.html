@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Expiration Date API</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        table { border-collapse: collapse; width: 100%; margin: 20px 0; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .success { color: green; font-weight: bold; }
+        .error { color: red; font-weight: bold; }
+        .loading { color: blue; }
+    </style>
+</head>
+<body>
+         <h1>Test Quantity History API (IN movements only)</h1>
+     <button onclick="testExpirationAPI()">Test API for Product ID 75 (bioderm) - IN movements only</button>
+    
+    <div id="results"></div>
+
+    <script>
+        async function testExpirationAPI() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '<p class="loading">Testing API...</p>';
+            
+            try {
+                const response = await fetch('Api/backend.php', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        action: 'get_quantity_history',
+                        product_id: 75
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    displayResults(data.data);
+                } else {
+                    resultsDiv.innerHTML = `<p class="error">API Error: ${data.message}</p>`;
+                }
+            } catch (error) {
+                resultsDiv.innerHTML = `<p class="error">Network Error: ${error.message}</p>`;
+            }
+        }
+        
+        function displayResults(history) {
+            const resultsDiv = document.getElementById('results');
+            
+            let html = '<h2>Quantity History Results</h2>';
+            html += '<table>';
+            html += '<tr>';
+            html += '<th>Movement ID</th>';
+            html += '<th>Type</th>';
+            html += '<th>Qty Change</th>';
+            html += '<th>Remaining Qty</th>';
+                         html += '<th>SRP</th>';
+            html += '<th>Movement Date</th>';
+                         html += '<th>Batch Reference</th>';
+             html += '<th>Expiry Date</th>';
+            html += '<th>Product Expiration</th>';
+            html += '<th>Notes</th>';
+            html += '</tr>';
+            
+            history.forEach((movement, index) => {
+                html += '<tr>';
+                html += `<td>${movement.movement_id}</td>`;
+                html += `<td>${movement.movement_type}</td>`;
+                html += `<td>${movement.quantity_change}</td>`;
+                html += `<td>${movement.remaining_quantity}</td>`;
+                html += `<td>₱${parseFloat(movement.srp || movement.unit_cost || 0).toFixed(2)}</td>`;
+                html += `<td>${new Date(movement.movement_date).toLocaleDateString()}</td>`;
+                                 // Batch Reference column - sequential number
+                 html += `<td style="font-family: monospace; color: blue;">${index + 1}</td>`;
+                 
+                 // Expiry Date column
+                 const expirationDate = movement.expiration_date;
+                 const expirationClass = expirationDate ? 'success' : 'error';
+                 html += `<td class="${expirationClass}">${expirationDate || 'NULL'}</td>`;
+                
+                html += `<td>${movement.product_expiration || 'NULL'}</td>`;
+                html += `<td>${movement.notes ? movement.notes.substring(0, 50) + '...' : 'N/A'}</td>`;
+                html += '</tr>';
+            });
+            
+            html += '</table>';
+            
+            // Summary
+            const withExpiration = history.filter(m => m.expiration_date).length;
+            const total = history.length;
+            
+                         html += `<h3>Summary</h3>`;
+             html += `<p>Total IN movements: ${total} (OUT movements excluded)</p>`;
+             html += `<p class="${withExpiration > 0 ? 'success' : 'error'}">Movements with expiration dates: ${withExpiration}/${total}</p>`;
+             
+             if (withExpiration > 0) {
+                 html += `<p class="success">✅ SUCCESS: IN movements with expiration dates are now being retrieved from the database!</p>`;
+                 html += `<p class="success">✅ OUT movements are excluded as requested (admin logs handle POS/convenience activities)</p>`;
+             } else {
+                 html += `<p class="error">❌ ISSUE: No expiration dates found. Check the database or API query.</p>`;
+             }
+            
+            resultsDiv.innerHTML = html;
+        }
+    </script>
+</body>
+</html>

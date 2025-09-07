@@ -1,0 +1,309 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+  
+  /* Theme variables */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f9fafb;
+  --bg-card: #ffffff;
+  --text-primary: #111827;
+  --text-secondary: #6b7280;
+  --border-color: #e5e7eb;
+  --shadow-color: rgba(0, 0, 0, 0.1);
+  
+  /* Inventory Theme Variables - Default to Dark Mode */
+  --inventory-bg-primary: #0f172a;
+  --inventory-bg-secondary: #1e293b;
+  --inventory-bg-card: #334155;
+  --inventory-bg-hover: #475569;
+  --inventory-text-primary: #f8fafc;
+  --inventory-text-secondary: #cbd5e1;
+  --inventory-text-muted: #94a3b8;
+  --inventory-border: #475569;
+  --inventory-border-light: #64748b;
+  --inventory-shadow: rgba(0, 0, 0, 0.3);
+  --inventory-accent: #3b82f6;
+  --inventory-accent-hover: #2563eb;
+  --inventory-success: #10b981;
+  --inventory-warning: #f59e0b;
+  --inventory-danger: #ef4444;
+  --inventory-info: #06b6d4;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  scroll-behavior: smooth;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(to bottom, #cbd5e1, #94a3b8);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(to bottom, #94a3b8, #64748b);
+}
+
+/* Smooth transitions for all elements */
+* {
+  transition: all 0.2s ease-in-out;
+}
+
+/* Dark theme styles */
+.dark-theme {
+  --background: #1f2937;
+  --foreground: #f9fafb;
+}
+
+/* Inventory Dark Theme Styles */
+.inventory-dark-theme {
+  --inventory-bg-primary: #0f172a;
+  --inventory-bg-secondary: #1e293b;
+  --inventory-bg-card: #334155;
+  --inventory-bg-hover: #475569;
+  --inventory-text-primary: #f8fafc;
+  --inventory-text-secondary: #cbd5e1;
+  --inventory-text-muted: #94a3b8;
+  --inventory-border: #475569;
+  --inventory-border-light: #64748b;
+  --inventory-shadow: rgba(0, 0, 0, 0.3);
+}
+
+.inventory-light-theme {
+  --inventory-bg-primary: #ffffff;
+  --inventory-bg-secondary: #f8fafc;
+  --inventory-bg-card: #ffffff;
+  --inventory-bg-hover: #f1f5f9;
+  --inventory-text-primary: #0f172a;
+  --inventory-text-secondary: #475569;
+  --inventory-text-muted: #64748b;
+  --inventory-border: #e2e8f0;
+  --inventory-border-light: #f1f5f9;
+  --inventory-shadow: rgba(0, 0, 0, 0.1);
+}
+
+/* Inventory themed utility classes (no functional impact) */
+.inventory-surface {
+  background-color: var(--inventory-bg-primary);
+  color: var(--inventory-text-primary);
+}
+
+.inventory-card {
+  background-color: var(--inventory-bg-card);
+  color: var(--inventory-text-primary);
+  border: 1px solid var(--inventory-border);
+  box-shadow: 0 10px 25px var(--inventory-shadow);
+}
+
+.inventory-muted {
+  color: var(--inventory-text-secondary);
+}
+
+.inventory-input,
+.inventory-select,
+.inventory-textarea {
+  background-color: var(--inventory-bg-secondary);
+  color: var(--inventory-text-primary);
+  border: 1px solid var(--inventory-border);
+}
+
+.inventory-input:focus,
+.inventory-select:focus,
+.inventory-textarea:focus {
+  outline: none;
+  border-color: var(--inventory-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--inventory-accent) 30%, transparent);
+}
+
+.inventory-button-primary {
+  background-color: var(--inventory-accent);
+  color: #fff;
+}
+
+.inventory-button-primary:hover {
+  background-color: var(--inventory-accent-hover);
+}
+
+.inventory-button-danger {
+  background-color: var(--inventory-danger);
+  color: #fff;
+}
+
+.inventory-button-danger:hover {
+  background-color: #dc2626;
+}
+
+.inventory-separator {
+  border-color: var(--inventory-border);
+}
+
+/* Container-scoped overrides to dark-theme common Tailwind classes */
+.inventory-surface {
+  background-color: var(--inventory-bg-primary);
+  color: var(--inventory-text-primary);
+}
+
+.inventory-surface .bg-white,
+.inventory-surface .bg-gray-50,
+.inventory-surface .bg-blue-50,
+.inventory-surface .from-blue-50,
+.inventory-surface .to-indigo-50 {
+  background-color: var(--inventory-bg-card) !important;
+  background-image: none !important;
+}
+
+.inventory-surface .text-gray-900 {
+  color: var(--inventory-text-primary) !important;
+}
+.inventory-surface .text-gray-700,
+.inventory-surface .text-gray-600,
+.inventory-surface .text-gray-500,
+.inventory-surface .text-gray-400 {
+  color: var(--inventory-text-secondary) !important;
+}
+
+.inventory-surface .border-gray-300,
+.inventory-surface .border-gray-200,
+.inventory-surface .border-blue-200,
+.inventory-surface .divide-gray-100,
+.inventory-surface .divide-gray-200 {
+  border-color: var(--inventory-border) !important;
+}
+
+.inventory-surface input,
+.inventory-surface select,
+.inventory-surface textarea {
+  background-color: var(--inventory-bg-secondary) !important;
+  color: var(--inventory-text-primary) !important;
+  border-color: var(--inventory-border) !important;
+}
+
+.inventory-surface input::placeholder,
+.inventory-surface textarea::placeholder {
+  color: var(--inventory-text-muted) !important;
+}
+
+.inventory-surface thead {
+  background-color: var(--inventory-bg-secondary) !important;
+}
+
+/* Theme transition styles */
+body {
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Ensure smooth theme switching */
+*[style*="--bg-primary"],
+*[style*="--bg-card"],
+*[style*="--text-primary"] {
+  transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* Custom animations */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Animation classes */
+.animate-fade-in-up {
+  animation: fadeInUp 0.6s ease-out;
+}
+
+.animate-slide-in-left {
+  animation: slideInLeft 0.6s ease-out;
+}
+
+.animate-pulse-slow {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Glass morphism effect */
+.glass {
+  background: rgba(255, 255, 255, 0.25);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+/* Enhanced focus states */
+button:focus, input:focus, select:focus, textarea:focus {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+  transition: outline 0.2s ease-in-out;
+}
+
+/* Hover effects */
+.hover-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+}
+
+/* Gradient text */
+.gradient-text {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
