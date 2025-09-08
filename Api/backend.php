@@ -897,6 +897,42 @@ try {
             $date_from = isset($data['date_from']) ? trim($data['date_from']) : '';
             $date_to = isset($data['date_to']) ? trim($data['date_to']) : '';
 
+            // Ensure table exists and add sample data if empty
+            $conn->exec("CREATE TABLE IF NOT EXISTS tbl_activity_log (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NULL,
+                username VARCHAR(255) NULL,
+                role VARCHAR(100) NULL,
+                activity_type VARCHAR(100) NOT NULL,
+                activity_description TEXT NULL,
+                table_name VARCHAR(255) NULL,
+                record_id INT NULL,
+                date_created DATE NOT NULL,
+                time_created TIME NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+            
+            // Check if table is empty and add sample data
+            $countStmt = $conn->prepare("SELECT COUNT(*) as count FROM tbl_activity_log");
+            $countStmt->execute();
+            $count = $countStmt->fetch(PDO::FETCH_ASSOC)['count'];
+            
+            if ($count == 0) {
+                // Add sample data for testing
+                $sampleData = [
+                    ['STOCK_ADJUSTMENT_CREATED', 'Stock Addition: 100 units of Medicine ABC (Reason: New delivery)', 'admin', 'Admin'],
+                    ['INVENTORY_TRANSFER_CREATED', 'Transfer created from Warehouse to Convenience Store: 5 products', 'inventory', 'Inventory'],
+                    ['POS_SALE_SAVED', 'POS Sale completed: Transaction TXN-2024001 - ₱250.00 (CASH, 3 items) at Convenience POS', 'cashier', 'Cashier'],
+                    ['WAREHOUSE_STOCK_UPDATED', 'Warehouse stock updated: Product ID 45, Quantity: 50, Batch: BTH-001', 'inventory', 'Inventory'],
+                    ['USER_ACTIVATED', 'Activated user ezay (ID 1)', 'admin', 'Admin']
+                ];
+                
+                $insertSample = $conn->prepare("INSERT INTO tbl_activity_log (activity_type, activity_description, username, role, date_created, time_created) VALUES (?, ?, ?, ?, CURDATE(), CURTIME())");
+                foreach ($sampleData as $sample) {
+                    $insertSample->execute($sample);
+                }
+            }
+
             // Fetch activity logs
             $paramsAct = [];
             $whereAct = [];
@@ -909,10 +945,97 @@ try {
             $whereActSql = count($whereAct) ? ('WHERE ' . implode(' AND ', $whereAct)) : '';
             $stmtAct = $conn->prepare("SELECT date_created, time_created, username, role, activity_type AS action, activity_description AS description FROM tbl_activity_log $whereActSql ORDER BY created_at DESC, id DESC LIMIT :limAct");
             foreach ($paramsAct as $k => $v) { $stmtAct->bindValue($k, $v); }
-            $limAct = min($limit, 500);
+            $limAct = min($limit, 300);
             $stmtAct->bindValue(':limAct', $limAct, PDO::PARAM_INT);
             $stmtAct->execute();
             $activity = $stmtAct->fetchAll(PDO::FETCH_ASSOC);
+
+            // Fetch inventory movement history
+            $movementData = [];
+            try {
+                $paramsMovement = [];
+                $whereMovement = [];
+                if ($search !== '') {
+                    $whereMovement[] = "(p.product_name LIKE :s OR p.barcode LIKE :s OR sm.created_by LIKE :s)";
+                    $paramsMovement[':s'] = '%' . $search . '%';
+                }
+                if ($date_from !== '') { $whereMovement[] = "DATE(sm.movement_date) >= :df"; $paramsMovement[':df'] = $date_from; }
+                if ($date_to !== '') { $whereMovement[] = "DATE(sm.movement_date) <= :dt"; $paramsMovement[':dt'] = $date_to; }
+                $whereMovementSql = count($whereMovement) ? ('WHERE ' . implode(' AND ', $whereMovement)) : '';
+
+                $stmtMovement = $conn->prepare("
+                    SELECT 
+                        DATE(sm.movement_date) as date_created,
+                        TIME(sm.movement_date) as time_created,
+                        sm.created_by as username,
+                        'Inventory' as role,
+                        CONCAT('STOCK_', UPPER(sm.movement_type)) as action,
+                        CONCAT(
+                            CASE sm.movement_type
+                                WHEN 'IN' THEN '📦 Stock Added: '
+                                WHEN 'OUT' THEN '📤 Stock Removed: '
+                                ELSE '📊 Stock Movement: '
+                            END,
+                            sm.quantity, ' units of ', p.product_name,
+                            CASE WHEN sm.notes IS NOT NULL THEN CONCAT(' (', sm.notes, ')') ELSE '' END
+                        ) as description
+                    FROM tbl_stock_movements sm
+                    LEFT JOIN tbl_product p ON sm.product_id = p.product_id
+                    $whereMovementSql
+                    ORDER BY sm.movement_date DESC
+                    LIMIT :limMovement
+                ");
+                foreach ($paramsMovement as $k => $v) { $stmtMovement->bindValue($k, $v); }
+                $limMovement = min($limit, 100);
+                $stmtMovement->bindValue(':limMovement', $limMovement, PDO::PARAM_INT);
+                $stmtMovement->execute();
+                $movementData = $stmtMovement->fetchAll(PDO::FETCH_ASSOC);
+            } catch (Exception $e) {
+                // Continue even if movement data fails
+                error_log("Movement data fetch failed: " . $e->getMessage());
+            }
+
+            // Fetch inventory transfer history
+            $transferData = [];
+            try {
+                $paramsTransfer = [];
+                $whereTransfer = [];
+                if ($search !== '') {
+                    $whereTransfer[] = "(th.transferred_by LIKE :s OR sl.location_name LIKE :s OR dl.location_name LIKE :s)";
+                    $paramsTransfer[':s'] = '%' . $search . '%';
+                }
+                if ($date_from !== '') { $whereTransfer[] = "DATE(th.date) >= :df"; $paramsTransfer[':df'] = $date_from; }
+                if ($date_to !== '') { $whereTransfer[] = "DATE(th.date) <= :dt"; $paramsTransfer[':dt'] = $date_to; }
+                $whereTransferSql = count($whereTransfer) ? ('WHERE ' . implode(' AND ', $whereTransfer)) : '';
+
+                $stmtTransfer = $conn->prepare("
+                    SELECT 
+                        DATE(th.date) as date_created,
+                        TIME(th.date) as time_created,
+                        th.transferred_by as username,
+                        'Inventory' as role,
+                        'INVENTORY_TRANSFER' as action,
+                        CONCAT(
+                            '🚛 Transfer #', th.transfer_header_id, ': ',
+                            sl.location_name, ' → ', dl.location_name,
+                            ' (Status: ', UPPER(th.status), ')'
+                        ) as description
+                    FROM tbl_transfer_header th
+                    LEFT JOIN tbl_location sl ON th.source_location_id = sl.location_id
+                    LEFT JOIN tbl_location dl ON th.destination_location_id = dl.location_id
+                    $whereTransferSql
+                    ORDER BY th.date DESC
+                    LIMIT :limTransfer
+                ");
+                foreach ($paramsTransfer as $k => $v) { $stmtTransfer->bindValue($k, $v); }
+                $limTransfer = min($limit, 100);
+                $stmtTransfer->bindValue(':limTransfer', $limTransfer, PDO::PARAM_INT);
+                $stmtTransfer->execute();
+                $transferData = $stmtTransfer->fetchAll(PDO::FETCH_ASSOC);
+            } catch (Exception $e) {
+                // Continue even if transfer data fails
+                error_log("Transfer data fetch failed: " . $e->getMessage());
+            }
 
             // Fetch login activity; materialize both login and logout as separate entries
             $paramsLogin = [];
@@ -955,25 +1078,36 @@ try {
                 }
             }
 
-            // Merge activity and login logs into a single array and sort by date/time desc
-            foreach ($activity as $a) { $logs[] = $a; }
+            // Normalize login logs to match the format of other logs
+            foreach ($logs as &$log) {
+                if (isset($log['login_date']) && !isset($log['date_created'])) {
+                    $log['date_created'] = $log['login_date'];
+                    $log['time_created'] = $log['login_time'];
+                    $log['action'] = $log['log_activity'];
+                    unset($log['login_date'], $log['login_time'], $log['log_activity']);
+                }
+            }
 
-            usort($logs, function ($x, $y) {
-                $dx = isset($x['date_created']) ? $x['date_created'] : (isset($x['login_date']) ? $x['login_date'] : '');
-                $tx = isset($x['time_created']) ? $x['time_created'] : (isset($x['login_time']) ? $x['login_time'] : '');
-                $dy = isset($y['date_created']) ? $y['date_created'] : (isset($y['login_date']) ? $y['login_date'] : '');
-                $ty = isset($y['time_created']) ? $y['time_created'] : (isset($y['login_time']) ? $y['login_time'] : '');
+            // Merge all data sources: activity logs, movement data, transfer data, and login logs
+            $allLogs = array_merge($activity, $movementData, $transferData, $logs);
+
+            // Sort all logs by date/time descending
+            usort($allLogs, function ($x, $y) {
+                $dx = $x['date_created'] ?? '';
+                $tx = $x['time_created'] ?? '';
+                $dy = $y['date_created'] ?? '';
+                $ty = $y['time_created'] ?? '';
                 $sx = strtotime($dx . ' ' . $tx);
                 $sy = strtotime($dy . ' ' . $ty);
                 return $sy <=> $sx;
             });
 
             // Apply overall limit
-            if (count($logs) > $limit) {
-                $logs = array_slice($logs, 0, $limit);
+            if (count($allLogs) > $limit) {
+                $allLogs = array_slice($allLogs, 0, $limit);
             }
 
-            echo json_encode(["success" => true, "data" => $logs]);
+            echo json_encode(["success" => true, "data" => $allLogs]);
         } catch (Exception $e) {
             echo json_encode(["success" => false, "message" => "Error getting all logs: " . $e->getMessage(), "data" => []]);
         }
@@ -6301,10 +6435,13 @@ case 'get_products_oldest_batch_for_transfer':
                     $terminalId = (int)$conn->lastInsertId();
                 }
 
-                // Determine employee
-                $empId = 1; // default
-                if (session_status() !== PHP_SESSION_ACTIVE) { session_start(); }
-                if (!empty($_SESSION['user_id'])) { $empId = (int)$_SESSION['user_id']; }
+                // Determine employee: prefer explicit payload, then session
+                $empId = isset($data['emp_id']) ? (int)$data['emp_id'] : 0;
+                if ($empId <= 0) {
+                    if (session_status() !== PHP_SESSION_ACTIVE) { session_start(); }
+                    if (!empty($_SESSION['user_id'])) { $empId = (int)$_SESSION['user_id']; }
+                }
+                if ($empId <= 0) { $empId = 1; }
 
                 // Normalize payment method to enum values ('cash','card','Gcash')
                 $pt = strtolower(trim($paymentMethodRaw));
@@ -6433,6 +6570,10 @@ case 'get_products_oldest_batch_for_transfer':
                     t.date,
                     t.time,
                     t.payment_type,
+                    t.emp_id,
+                    e.username AS cashier,
+                    e.shift_id,
+                    s.shifts AS shift_name,
                     th.total_amount,
                     th.reference_number,
                     term.terminal_name,
@@ -6441,10 +6582,12 @@ case 'get_products_oldest_batch_for_transfer':
                 FROM tbl_pos_transaction t
                 JOIN tbl_pos_sales_header th ON t.transaction_id = th.transaction_id
                 JOIN tbl_pos_terminal term ON th.terminal_id = term.terminal_id
+                LEFT JOIN tbl_employee e ON t.emp_id = e.emp_id
+                LEFT JOIN tbl_shift s ON e.shift_id = s.shift_id
                 LEFT JOIN tbl_pos_sales_details td ON th.sales_header_id = td.sales_header_id
                 LEFT JOIN tbl_product p ON td.product_id = p.product_id
                 {$whereClause}
-                GROUP BY t.transaction_id, t.date, t.time, t.payment_type, th.total_amount, th.reference_number, term.terminal_name
+                GROUP BY t.transaction_id, t.date, t.time, t.payment_type, t.emp_id, e.username, e.shift_id, s.shifts, th.total_amount, th.reference_number, term.terminal_name
                 ORDER BY t.date DESC, t.time DESC
                 LIMIT :limit
             ";
@@ -8030,6 +8173,37 @@ case 'get_products_oldest_batch_for_transfer':
                 "success" => false,
                 "message" => "Database error: " . $e->getMessage()
             ]);
+        }
+        break;
+        
+    case 'test_logging':
+        try {
+            // Add test log entry for debugging
+            $conn->exec("CREATE TABLE IF NOT EXISTS tbl_activity_log (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NULL,
+                username VARCHAR(255) NULL,
+                role VARCHAR(100) NULL,
+                activity_type VARCHAR(100) NOT NULL,
+                activity_description TEXT NULL,
+                table_name VARCHAR(255) NULL,
+                record_id INT NULL,
+                date_created DATE NOT NULL,
+                time_created TIME NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+            
+            $stmt = $conn->prepare("INSERT INTO tbl_activity_log (activity_type, activity_description, username, role, date_created, time_created) VALUES (?, ?, ?, ?, CURDATE(), CURTIME())");
+            $stmt->execute([
+                'TEST_LOG_ENTRY',
+                'Manual test log entry created at ' . date('Y-m-d H:i:s'),
+                'admin',
+                'Admin'
+            ]);
+            
+            echo json_encode(["success" => true, "message" => "Test log entry created successfully"]);
+        } catch (Exception $e) {
+            echo json_encode(["success" => false, "message" => "Error creating test log: " . $e->getMessage()]);
         }
         break;
          

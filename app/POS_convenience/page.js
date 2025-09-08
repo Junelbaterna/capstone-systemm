@@ -1226,12 +1226,13 @@ export default function POS() {
     const transactionId = `TXN${now.getTime().toString().slice(-6)}`;
 
     // Prepare receipt data
+    const sessionUser = (typeof window !== 'undefined') ? JSON.parse(sessionStorage.getItem('user_data') || '{}') : {};
     const receiptData = {
       storeName: "Enguios Pharmacy & Convenience Store",
       date: dateStr,
       time: timeStr,
       transactionId: transactionId,
-      cashier: (typeof window !== 'undefined' && (localStorage.getItem('pos-cashier') || localStorage.getItem('currentUser') || localStorage.getItem('user') || 'Admin')),
+      cashier: (sessionUser.username || (typeof window !== 'undefined' && (localStorage.getItem('pos-cashier') || localStorage.getItem('currentUser') || localStorage.getItem('user') || 'Admin'))),
       terminalName,
       items: cart.map(item => ({
         name: item.product.name,
@@ -1288,6 +1289,10 @@ export default function POS() {
   // Persist sale to backend (always called, even if printing fails)
   const persistSale = async ({ transactionId, payableTotal, referenceNumber, terminalName, cart, paymentMethod }) => {
     try {
+      const userData = JSON.parse(sessionStorage.getItem('user_data') || '{}');
+      const empId = userData.emp_id || userData.user_id || null;
+      const username = userData.username || null;
+      const terminalToUse = (String(locationName || '').toLowerCase().includes('convenience')) ? 'Convenience POS' : (terminalName || 'Convenience POS');
       const res1 = await fetch('http://localhost/Enguio_Project/Api/sales_api.php', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1296,24 +1301,30 @@ export default function POS() {
           transactionId,
           totalAmount: payableTotal,
           referenceNumber: paymentMethod === 'gcash' ? referenceNumber : null,
-          terminalName,
+          terminalName: terminalToUse,
           paymentMethod,
           location_name: locationName,
+          emp_id: empId,
+          username,
           items: cart.map(it => ({ product_id: it.product.id, quantity: it.quantity, price: it.product.price }))
         })
       });
       const json1 = await res1.json().catch(() => ({}));
       console.log('save_pos_sale:', json1);
       try {
+        const userData = JSON.parse(sessionStorage.getItem('user_data') || '{}');
         await fetch('http://localhost/Enguio_Project/Api/backend.php', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             action: 'log_activity',
             activity_type: 'POS_SALE_SAVED',
-            description: `Saved sale ${transactionId} total ₱${payableTotal}`,
+            description: `POS Sale completed: Transaction ${transactionId} - ₱${payableTotal} (${paymentMethod.toUpperCase()}, ${cart.length} items) at ${terminalName}`,
             table_name: 'tbl_pos_sales',
             record_id: null,
+            user_id: userData.user_id || userData.emp_id,
+            username: userData.username,
+            role: userData.role,
           }),
         });
       } catch (_) {}

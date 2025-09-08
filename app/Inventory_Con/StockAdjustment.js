@@ -142,6 +142,25 @@ const StockAdjustment = () => {
         created_by: 'admin' // This should come from user session
       });
       
+      // Log the activity with user context
+      try {
+        const userData = JSON.parse(sessionStorage.getItem('user_data') || '{}');
+        await fetch('http://localhost/Enguio_Project/Api/backend.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'log_activity',
+            activity_type: 'STOCK_ADJUSTMENT_CREATED',
+            description: `Stock ${adjustmentData.adjustment_type}: ${adjustmentData.quantity} units of ${adjustmentData.product_name || 'Product'} (Reason: ${adjustmentData.reason})`,
+            table_name: 'tbl_stock_movements',
+            record_id: result.data?.adjustment_id || null,
+            user_id: userData.user_id || userData.emp_id,
+            username: userData.username,
+            role: userData.role,
+          }),
+        });
+      } catch (_) {}
+      
       toast.success('Stock adjustment created successfully');
       setShowCreateModal(false);
       setNewAdjustment({
@@ -161,6 +180,21 @@ const StockAdjustment = () => {
       
       return result;
     } catch (error) {
+      // Log the error
+      try {
+        await fetch('http://localhost/Enguio_Project/Api/backend.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'log_activity',
+            activity_type: 'STOCK_ADJUSTMENT_ERROR',
+            description: `Failed to create stock adjustment: ${error.message}`,
+            table_name: 'tbl_stock_movements',
+            record_id: null,
+          }),
+        });
+      } catch (_) {}
+      
       toast.error('Failed to create adjustment: ' + error.message);
       throw error;
     }
@@ -178,6 +212,21 @@ const StockAdjustment = () => {
         expiration_date: adjustmentData.expiration_date
       });
       
+      // Log the activity
+      try {
+        await fetch('http://localhost/Enguio_Project/Api/backend.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'log_activity',
+            activity_type: 'STOCK_ADJUSTMENT_UPDATED',
+            description: `Updated stock adjustment: ${adjustmentData.quantity} units (Reason: ${adjustmentData.reason})`,
+            table_name: 'tbl_stock_movements',
+            record_id: adjustmentData.id,
+          }),
+        });
+      } catch (_) {}
+      
       toast.success('Adjustment updated successfully');
       setShowModal(false);
       setEditingAdjustment(null);
@@ -188,6 +237,21 @@ const StockAdjustment = () => {
       
       return result;
     } catch (error) {
+      // Log the error
+      try {
+        await fetch('http://localhost/Enguio_Project/Api/backend.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'log_activity',
+            activity_type: 'STOCK_ADJUSTMENT_UPDATE_ERROR',
+            description: `Failed to update stock adjustment ID ${adjustmentData.id}: ${error.message}`,
+            table_name: 'tbl_stock_movements',
+            record_id: adjustmentData.id,
+          }),
+        });
+      } catch (_) {}
+      
       toast.error('Failed to update adjustment: ' + error.message);
       throw error;
     }

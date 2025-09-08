@@ -736,11 +736,17 @@ function SalesHistory() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [employees, setEmployees] = useState([]);
+  const [selectedCashier, setSelectedCashier] = useState(null);
+  const [showModal, setShowModal] = useState(false);
+  const [selectedCashierTxns, setSelectedCashierTxns] = useState([]);
+  const [txnPage, setTxnPage] = useState(1);
+  const txnsPerPage = 10;
 
   const fetchSales = async () => {
     try {
       setLoading(true);
-      const res = await axios.post(API_BASE_URL, { action: 'get_pos_sales', limit: 200 });
+      const res = await axios.post(API_BASE_URL, { action: 'get_pos_sales', limit: 500 });
       if (res.data?.success && Array.isArray(res.data.data)) {
         setRows(res.data.data);
       } else {
@@ -753,15 +759,126 @@ function SalesHistory() {
     }
   };
 
-  useEffect(() => { fetchSales(); }, []);
+  const fetchEmployees = async () => {
+    try {
+      const resp = await axios.post(API_BASE_URL, { action: 'display_employee' });
+      if (resp.data?.success) setEmployees(resp.data.employees || []);
+    } catch (_) {}
+  };
+
+  useEffect(() => { fetchSales(); fetchEmployees(); }, []);
   useEffect(() => { /* Removed navigation/viewing logging */ }, []);
 
-  const filtered = rows.filter(r => {
-    const text = (String(r.transaction_id || '') + ' ' + (r.cashier||'') + ' ' + (r.terminal_name||'') + ' ' + (r.payment_type||'')).toLowerCase();
-    return text.includes(search.toLowerCase());
-  });
+  const getShiftName = (shiftId) => {
+    if (shiftId === null || shiftId === undefined) return '-';
+    switch (Number(shiftId)) {
+      case 1: return 'Shift1';
+      case 2: return 'Shift2';
+      case 3: return 'Shift3';
+      default: return 'Unknown';
+    }
+  };
 
   const fmtPeso = (n) => `₱${Number(n||0).toFixed(2)}`;
+  const cashierToShift = (() => {
+    const map = new Map();
+    for (const e of employees) {
+      if (e?.username) map.set(String(e.username).toLowerCase(), getShiftName(e.shift_id));
+    }
+    return map;
+  })();
+
+  // Aggregate sales per cashier
+  const stats = (() => {
+    const m = new Map();
+
+    // Pre-seed all cashiers (role_id 2 or 3) even without sales
+    const employeeCashiers = (employees || []).filter(e => {
+      const rid = Number(e?.role_id);
+      return rid === 2 || rid === 3;
+    });
+    for (const emp of employeeCashiers) {
+      const username = String(emp.username || '').toLowerCase();
+      if (!username) continue;
+      const displayName = `${emp.Fname || ''} ${emp.Lname || ''}`.trim() || emp.username;
+      if (!m.has(username)) {
+        m.set(username, {
+          cashier: displayName,
+          username: emp.username,
+          transactions: 0,
+          total: 0,
+          payments: {},
+          terminals: new Set(),
+          firstSale: null,
+          lastSale: null,
+          shift: getShiftName(emp.shift_id),
+        });
+      }
+    }
+
+    // Accumulate POS sales into the map
+    for (const r of rows) {
+      const cashierRaw = r.cashier || 'Unknown';
+      const keyCandidate = String(cashierRaw).toLowerCase();
+      const key = m.has(keyCandidate) ? keyCandidate : keyCandidate || 'unknown';
+      if (!m.has(key)) {
+        m.set(key, {
+          cashier: cashierRaw,
+          username: cashierRaw,
+          transactions: 0,
+          total: 0,
+          payments: {},
+          terminals: new Set(),
+          firstSale: null,
+          lastSale: null,
+          shift: (r.shift_name || cashierToShift.get(key) || '-'),
+        });
+      }
+      const s = m.get(key);
+      const payment = String(r.payment_type || '-').trim().toLowerCase();
+      const amount = Number(r.total_amount || 0);
+      const terminal = (r.terminal_name || r.terminal || 'POS');
+      const date = r.txn_date || r.date || '-';
+      const time = r.txn_time || r.time || '-';
+      s.transactions += 1;
+      s.total += amount;
+      s.payments[payment] = (s.payments[payment] || 0) + amount;
+      s.terminals.add(terminal);
+      const dtStr = `${date} ${time}`.trim();
+      const dt = new Date(dtStr);
+      if (!s.firstSale || (dt instanceof Date && !isNaN(dt) && dt < s.firstSale)) s.firstSale = dt;
+      if (!s.lastSale || (dt instanceof Date && !isNaN(dt) && dt > s.lastSale)) s.lastSale = dt;
+    }
+
+    return Array.from(m.values()).sort((a,b)=>b.total - a.total);
+  })();
+
+  const filtered = stats.filter(s =>
+    s.cashier.toLowerCase().includes(search.toLowerCase()) ||
+    String(s.username || '').toLowerCase().includes(search.toLowerCase())
+  );
+
+  const isRowForCashier = (row, s) => {
+    const rc = String(row.cashier || 'unknown').toLowerCase();
+    const u = String(s.username || '').toLowerCase();
+    const c = String(s.cashier || '').toLowerCase();
+    return rc === u || rc === c || (c === 'unknown' && rc === 'unknown');
+  };
+
+  const openDetails = (s) => {
+    const txns = rows
+      .filter(r => isRowForCashier(r, s))
+      .sort((a, b) => {
+        const da = new Date(`${a.txn_date || ''} ${a.txn_time || ''}`);
+        const db = new Date(`${b.txn_date || ''} ${b.txn_time || ''}`);
+        return isNaN(db) - isNaN(da) || db - da;
+      });
+    setSelectedCashier(s);
+    setSelectedCashierTxns(txns);
+    setTxnPage(1);
+    setShowModal(true);
+  };
+  const closeDetails = () => { setShowModal(false); setSelectedCashier(null); };
 
   return (
     <div className="p-8">
@@ -770,7 +887,7 @@ function SalesHistory() {
       <div className="flex items-end gap-3 mb-4">
         <div>
           <label className="block text-sm text-gray-600 mb-1">Search</label>
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by transaction, cashier, terminal, payment" className="border p-2 rounded w-80" />
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search cashier name" className="border p-2 rounded w-80" />
         </div>
         <button onClick={fetchSales} className="h-10 px-4 bg-blue-500 text-white rounded">Refresh</button>
       </div>
@@ -780,68 +897,132 @@ function SalesHistory() {
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50 sticky top-0 z-10">
               <tr>
-                <th className="px-3 py-2 text-left text-xs font-bold uppercase">Txn ID</th>
-                <th className="px-3 py-2 text-left text-xs font-bold uppercase">Date</th>
-                <th className="px-3 py-2 text-left text-xs font-bold uppercase">Time</th>
                 <th className="px-3 py-2 text-left text-xs font-bold uppercase">Cashier</th>
-                <th className="px-3 py-2 text-left text-xs font-bold uppercase">Terminal</th>
-                <th className="px-3 py-2 text-left text-xs font-bold uppercase">Payment</th>
-                <th className="px-3 py-2 text-right text-xs font-bold uppercase">Total</th>
+                <th className="px-3 py-2 text-left text-xs font-bold uppercase">Shift</th>
+                <th className="px-3 py-2 text-right text-xs font-bold uppercase">Transactions</th>
+                <th className="px-3 py-2 text-right text-xs font-bold uppercase">Total Sales</th>
+                <th className="px-3 py-2 text-left text-xs font-bold uppercase">Terminals</th>
+                <th className="px-3 py-2 text-left text-xs font-bold uppercase">Last Sale</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {loading ? (
-                <tr><td colSpan="7" className="text-center py-6">Loading...</td></tr>
+                <tr><td colSpan="6" className="text-center py-6">Loading...</td></tr>
               ) : filtered.length === 0 ? (
-                <tr><td colSpan="7" className="text-center py-6">No sales found</td></tr>
+                <tr><td colSpan="6" className="text-center py-6">No sales found</td></tr>
               ) : (
-                filtered.map((row, idx) => (
-                  <React.Fragment key={`${row.sales_header_id || 'hdr'}-${row.transaction_id || 'txn'}-${idx}`}>
-                    <tr className="hover:bg-gray-50">
-                      <td className="px-3 py-2">{row.transaction_id}</td>
-                      <td className="px-3 py-2">{row.txn_date || '-'}</td>
-                      <td className="px-3 py-2">{row.txn_time || '-'}</td>
-                      <td className="px-3 py-2">{row.cashier || '-'}</td>
-                      <td className="px-3 py-2">{row.terminal_name || '-'}</td>
-                      <td className="px-3 py-2">{row.payment_type || '-'}</td>
-                      <td className="px-3 py-2 text-right">{fmtPeso(row.total_amount)}</td>
-                    </tr>
-                    {Array.isArray(row.items) && row.items.length > 0 && (
-                      <tr className="bg-gray-50/50">
-                        <td colSpan={7} className="px-3 py-2">
-                          <div className="text-xs text-gray-600 font-semibold mb-1">Items</div>
-                          <div className="max-h-36 overflow-y-auto">
-                            <table className="w-full text-sm">
-                              <thead>
-                                <tr className="text-gray-500">
-                                  <th className="text-left">Product</th>
-                                  <th className="text-right">Qty</th>
-                                  <th className="text-right">Price</th>
-                                  <th className="text-right">Total</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {row.items.map((it, i) => (
-                                  <tr key={`${row.sales_header_id || 'hdr'}-${i}-${it.product_id || 'p'}`}>
-                                    <td className="pr-2">{it.product_name || it.product_id}</td>
-                                    <td className="text-right pr-2">{it.quantity}</td>
-                                    <td className="text-right pr-2">{fmtPeso(it.price)}</td>
-                                    <td className="text-right">{fmtPeso(it.total)}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </React.Fragment>
+                filtered.map((s, idx) => (
+                  <tr key={`${s.cashier}-${idx}`} className="hover:bg-gray-50">
+                    <td className="px-3 py-2">
+                      <button onClick={()=>openDetails(s)} className="text-blue-600 hover:underline">{s.cashier}</button>
+                    </td>
+                    <td className="px-3 py-2">{s.shift}</td>
+                    <td className="px-3 py-2 text-right">{s.transactions}</td>
+                    <td className="px-3 py-2 text-right">{fmtPeso(s.total)}</td>
+                    <td className="px-3 py-2">{Array.from(s.terminals).join(', ')}</td>
+                    <td className="px-3 py-2">{s.lastSale && !isNaN(s.lastSale) ? s.lastSale.toLocaleString() : '-'}</td>
+                  </tr>
                 ))
               )}
             </tbody>
           </table>
         </div>
       </div>
+
+      {showModal && selectedCashier && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-xl mx-4 border">
+            <div className="px-5 py-4 border-b flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Cashier Details</h2>
+              <button onClick={closeDetails} className="text-gray-600 hover:text-gray-800">✕</button>
+            </div>
+            <div className="p-5 space-y-4 text-sm">
+              <div className="grid grid-cols-2 gap-3">
+                <div><strong>Cashier:</strong> {selectedCashier.cashier}</div>
+                <div><strong>Shift:</strong> {selectedCashier.shift}</div>
+                <div><strong>Transactions:</strong> {selectedCashier.transactions}</div>
+                <div><strong>Total Sales:</strong> {fmtPeso(selectedCashier.total)}</div>
+                <div><strong>Average Sale:</strong> {fmtPeso(selectedCashier.total / Math.max(1, selectedCashier.transactions))}</div>
+                <div><strong>Terminals:</strong> {Array.from(selectedCashier.terminals).join(', ') || '-'}</div>
+                <div><strong>First Sale:</strong> {selectedCashier.firstSale && !isNaN(selectedCashier.firstSale) ? selectedCashier.firstSale.toLocaleString() : '-'}</div>
+                <div><strong>Last Sale:</strong> {selectedCashier.lastSale && !isNaN(selectedCashier.lastSale) ? selectedCashier.lastSale.toLocaleString() : '-'}</div>
+              </div>
+              <div>
+                <div className="font-semibold mb-1">Payments</div>
+                <div className="flex flex-wrap gap-2">
+                  {Object.keys(selectedCashier.payments).length === 0 ? (
+                    <span className="text-gray-500">No payment data</span>
+                  ) : (
+                    Object.entries(selectedCashier.payments).map(([k,v]) => (
+                      <span key={k} className="px-2 py-1 rounded border bg-gray-50 text-gray-700">{k.toUpperCase()}: {fmtPeso(v)}</span>
+                    ))
+                  )}
+                </div>
+              </div>
+              <div>
+                <div className="font-semibold mb-1">Transactions ({selectedCashierTxns.length})</div>
+                <div className="max-h-64 overflow-y-auto border rounded">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-2 py-1 text-left">Txn ID</th>
+                        <th className="px-2 py-1 text-left">Date</th>
+                        <th className="px-2 py-1 text-left">Time</th>
+                        <th className="px-2 py-1 text-left">Payment</th>
+                        <th className="px-2 py-1 text-left">Terminal</th>
+                        <th className="px-2 py-1 text-left">Shift</th>
+                        <th className="px-2 py-1 text-right">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedCashierTxns
+                        .slice((txnPage - 1) * txnsPerPage, txnPage * txnsPerPage)
+                        .map((t, i) => (
+                          <tr key={`${t.transaction_id || t.sales_header_id || 'txn'}-${i}`} className="border-t">
+                            <td className="px-2 py-1">{t.transaction_id || '-'}</td>
+                            <td className="px-2 py-1">{t.txn_date || t.date || '-'}</td>
+                            <td className="px-2 py-1">{t.txn_time || t.time || '-'}</td>
+                            <td className="px-2 py-1">{String(t.payment_type || '-').toUpperCase()}</td>
+                            <td className="px-2 py-1">{t.terminal_name || t.terminal || 'POS'}</td>
+                            <td className="px-2 py-1">{t.shift_name || getShiftName(t.shift_id) || '-'}</td>
+                            <td className="px-2 py-1 text-right">{fmtPeso(t.total_amount)}</td>
+                          </tr>
+                        ))}
+                      {selectedCashierTxns.length === 0 && (
+                        <tr><td colSpan={6} className="px-2 py-2 text-center text-gray-500">No transactions</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                {selectedCashierTxns.length > txnsPerPage && (
+                  <div className="flex items-center justify-between mt-2">
+                    <button
+                      onClick={() => setTxnPage(p => Math.max(1, p - 1))}
+                      disabled={txnPage === 1}
+                      className="px-3 py-1 border rounded disabled:opacity-50"
+                    >
+                      Prev
+                    </button>
+                    <div className="text-xs text-gray-600">
+                      Page {txnPage} of {Math.ceil(selectedCashierTxns.length / txnsPerPage)}
+                    </div>
+                    <button
+                      onClick={() => setTxnPage(p => Math.min(Math.ceil(selectedCashierTxns.length / txnsPerPage), p + 1))}
+                      disabled={txnPage === Math.ceil(selectedCashierTxns.length / txnsPerPage)}
+                      className="px-3 py-1 border rounded disabled:opacity-50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="px-5 py-3 border-t flex justify-end">
+              <button onClick={closeDetails} className="px-4 py-2 bg-blue-600 text-white rounded">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1818,7 +1999,9 @@ function UserManagement() {
                     className="w-full border p-2 rounded"
                     required
                     inputMode="numeric"
-                    pattern="\\d{11}"
+                    pattern="[0-9]{11}"
+                    maxLength={11}
+                    title="Enter exactly 11 digits"
                     placeholder="11 digits"
                   />
                 </div>
@@ -2108,6 +2291,14 @@ function Logs() {
   const [dateTo, setDateTo] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 12;
+  const [selectedTab, setSelectedTab] = useState('Movement History');
+  const [reports, setReports] = useState([]);
+  const [reportsLoading, setReportsLoading] = useState(false);
+  const [reportsPage, setReportsPage] = useState(1);
+  const [movementRows, setMovementRows] = useState([]);
+  const [movementLoading, setMovementLoading] = useState(false);
+  const [transferRows, setTransferRows] = useState([]);
+  const [transferLoading, setTransferLoading] = useState(false);
 
   const fetchLogs = async () => {
     setLoading(true);
@@ -2189,8 +2380,120 @@ function Logs() {
   useEffect(() => { fetchLogs(); }, []);
   useEffect(() => { /* Removed navigation/viewing logging */ }, []);
 
-  const paged = rows.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-  const totalPages = Math.max(1, Math.ceil(rows.length / itemsPerPage));
+  const fetchReports = async () => {
+    try {
+      setReportsLoading(true);
+      const res = await axios.post(API_BASE_URL, { action: 'get_reports_data' });
+      if (res.data?.success && Array.isArray(res.data.reports)) {
+        setReports(res.data.reports);
+        setReportsPage(1);
+      } else {
+        setReports([]);
+      }
+    } catch (_) {
+      setReports([]);
+    } finally {
+      setReportsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedTab === 'Reports') {
+      fetchReports();
+    }
+  }, [selectedTab]);
+
+  const fetchMovementHistory = async () => {
+    try {
+      setMovementLoading(true);
+      const res = await axios.post(API_BASE_URL, { action: 'get_movement_history', search });
+      if (res.data?.success && Array.isArray(res.data.data)) {
+        setMovementRows(res.data.data);
+        setCurrentPage(1);
+      } else {
+        setMovementRows([]);
+      }
+    } catch (_) {
+      setMovementRows([]);
+    } finally {
+      setMovementLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedTab === 'Movement History') {
+      fetchMovementHistory();
+    }
+  }, [selectedTab, search]);
+
+  const fetchTransferHistory = async () => {
+    try {
+      setTransferLoading(true);
+      const res = await axios.post(API_BASE_URL, { action: 'get_movement_history', search });
+      if (res.data?.success && Array.isArray(res.data.data)) {
+        const aggregated = (() => {
+          const m = new Map();
+          for (const r of res.data.data) {
+            const id = r.id || r.transfer_header_id;
+            if (!id) continue;
+            const qty = Number(r.quantity) || 0;
+            if (!m.has(id)) {
+              m.set(id, {
+                id,
+                date: r.date,
+                time: r.time,
+                fromLocation: r.fromLocation,
+                toLocation: r.toLocation,
+                movedBy: r.movedBy,
+                status: r.status,
+                itemsCount: 1,
+                totalQty: Math.abs(qty),
+              });
+            } else {
+              const ex = m.get(id);
+              ex.itemsCount += 1;
+              ex.totalQty += Math.abs(qty);
+            }
+          }
+          return Array.from(m.values()).sort((a, b) => {
+            const d = (new Date(b.date) - new Date(a.date));
+            if (d !== 0) return d;
+            return String(b.time).localeCompare(String(a.time));
+          });
+        })();
+        setTransferRows(aggregated);
+        setCurrentPage(1);
+      } else {
+        setTransferRows([]);
+      }
+    } catch (_) {
+      setTransferRows([]);
+    } finally {
+      setTransferLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedTab === 'Transfer History') {
+      fetchTransferHistory();
+    }
+  }, [selectedTab, search]);
+
+  const isMovementAction = (a) => {
+    const x = String(a || '').toLowerCase();
+    return x.includes('stock_in') || x.includes('stock_out') || x.includes('stock_adjustment') || x.startsWith('stock_') || x.includes('stock ');
+  };
+
+  const isTransferAction = (a) => String(a || '').toLowerCase().includes('inventory_transfer');
+
+  const filteredByTab = (() => {
+    if (selectedTab === 'Movements') return rows.filter(r => isMovementAction(r.action || r.log_activity));
+    if (selectedTab === 'Transfers') return rows.filter(r => isTransferAction(r.action || r.log_activity));
+    return rows;
+  })();
+
+  const paged = filteredByTab.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+  const totalPages = Math.max(1, Math.ceil(filteredByTab.length / itemsPerPage));
 
   const fmtTime = (s) => {
     if (!s) return '-';
@@ -2208,19 +2511,63 @@ function Logs() {
     const actionString = String(actionRaw || '').trim();
     const a = actionString.toLowerCase();
     const base = 'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium';
-    if (a.includes('login')) return <span className={`${base} bg-green-100 text-green-700`}>LOGIN</span>;
-    if (a.includes('logout')) return <span className={`${base} bg-gray-200 text-gray-800`}>LOGOUT</span>;
-    if (a.includes('user_activated')) return <span className={`${base} bg-emerald-100 text-emerald-700`}>USER ACTIVATED</span>;
-    if (a.includes('user_deactivated')) return <span className={`${base} bg-yellow-100 text-yellow-800`}>USER DEACTIVATED</span>;
-    if (a.includes('error') || a.includes('fail')) return <span className={`${base} bg-red-100 text-red-700`}>{actionString.toUpperCase()}</span>;
-    if (a.includes('user')) return <span className={`${base} bg-indigo-100 text-indigo-700`}>{actionString.toUpperCase()}</span>;
-    if (a.includes('activity')) return <span className={`${base} bg-blue-100 text-blue-700`}>ACTIVITY</span>;
+    
+    // System logs
+    if (a.includes('login')) return <span className={`${base} bg-green-100 text-green-700`}>🔐 LOGIN</span>;
+    if (a.includes('logout')) return <span className={`${base} bg-gray-200 text-gray-800`}>🚪 LOGOUT</span>;
+    if (a.includes('user_activated')) return <span className={`${base} bg-emerald-100 text-emerald-700`}>✅ USER ACTIVATED</span>;
+    if (a.includes('user_deactivated')) return <span className={`${base} bg-yellow-100 text-yellow-800`}>⚠️ USER DEACTIVATED</span>;
+    
+    // POS Activities
+    if (a.includes('pos_sale_saved')) return <span className={`${base} bg-blue-100 text-blue-700`}>💳 POS SALE</span>;
+    if (a.includes('pos_sale_error')) return <span className={`${base} bg-red-100 text-red-700`}>❌ POS ERROR</span>;
+    if (a.includes('pos')) return <span className={`${base} bg-blue-100 text-blue-700`}>💳 POS</span>;
+    
+    // Inventory Activities
+    if (a.includes('inventory_transfer_created')) return <span className={`${base} bg-purple-100 text-purple-700`}>🚚 TRANSFER</span>;
+    if (a.includes('inventory_transfer_deleted')) return <span className={`${base} bg-red-100 text-red-700`}>🗑️ TRANSFER DELETE</span>;
+    if (a.includes('inventory_transfer')) return <span className={`${base} bg-purple-100 text-purple-700`}>🚚 TRANSFER</span>;
+    
+    // Stock Movement Activities (from database)
+    if (a.includes('stock_in')) return <span className={`${base} bg-green-100 text-green-700`}>📦 STOCK IN</span>;
+    if (a.includes('stock_out')) return <span className={`${base} bg-orange-100 text-orange-700`}>📤 STOCK OUT</span>;
+    if (a.includes('stock_movement')) return <span className={`${base} bg-blue-100 text-blue-700`}>📊 MOVEMENT</span>;
+    if (a.includes('stock_adjustment')) return <span className={`${base} bg-teal-100 text-teal-700`}>⚖️ ADJUSTMENT</span>;
+    
+    // Stock & Warehouse Activities
+    if (a.includes('stock_adjustment_created')) return <span className={`${base} bg-orange-100 text-orange-700`}>📊 STOCK ADJ</span>;
+    if (a.includes('stock_adjustment_updated')) return <span className={`${base} bg-yellow-100 text-yellow-700`}>✏️ STOCK UPD</span>;
+    if (a.includes('warehouse_stock_updated')) return <span className={`${base} bg-teal-100 text-teal-700`}>🏭 WAREHOUSE</span>;
+    if (a.includes('stock') || a.includes('warehouse')) return <span className={`${base} bg-teal-100 text-teal-700`}>📊 STOCK</span>;
+    
+    // Error handling
+    if (a.includes('error') || a.includes('fail')) return <span className={`${base} bg-red-100 text-red-700`}>❌ {actionString.toUpperCase()}</span>;
+    
+    // User activities
+    if (a.includes('user')) return <span className={`${base} bg-indigo-100 text-indigo-700`}>👤 {actionString.toUpperCase()}</span>;
+    
+    // General activities
+    if (a.includes('activity')) return <span className={`${base} bg-blue-100 text-blue-700`}>📝 ACTIVITY</span>;
+    
     return <span className={`${base} bg-gray-100 text-gray-700`}>{actionString ? actionString.toUpperCase() : '-'}</span>;
   };
 
   return (
     <div className="p-8">
       <h1 className="text-2xl font-bold mb-4">Activity Logs</h1>
+
+      {/* Tabs */}
+      <div className="flex items-center gap-2 mb-4">
+        {['Movement History','Transfer History','Reports'].map(tab => (
+          <button
+            key={tab}
+            onClick={() => { setSelectedTab(tab); setCurrentPage(1); }}
+            className={`px-3 py-1.5 rounded border text-sm ${selectedTab === tab ? 'bg-blue-500 text-white border-blue-500' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
+          >
+            {tab}
+          </button>
+        ))}
+      </div>
 
       <div className="flex flex-wrap gap-3 items-end mb-4">
         <div className="flex-1 min-w-[220px]">
@@ -2240,77 +2587,300 @@ function Logs() {
       </div>
 
       <div className="w-full rounded-md border">
-        <div className="max-h-[520px] overflow-y-auto">
-          <table className="w-full caption-bottom text-sm">
-            <thead className="[&_tr]:border-b">
-              <tr className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
-                <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">#</th>
-                <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">Date</th>
-                <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">Time</th>
-                <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">User</th>
-                <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">Username</th>
-                <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">Role</th>
-                <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">Action</th>
-                <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">Description</th>
-              </tr>
-            </thead>
-            <tbody className="[&_tr:last-child]:border-0">
-              {loading ? (
-                <tr className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
-                  <td colSpan="8" className="p-4 text-center text-muted-foreground">Loading...</td>
-                </tr>
-              ) : rows.length === 0 ? (
-                <tr className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
-                  <td colSpan="8" className="p-4 text-center text-muted-foreground">No logs</td>
-                </tr>
-              ) : (
-                paged.map((r, idx) => (
-                  <tr key={`${r.date_created}-${r.time_created}-${idx}`} className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
-                    <td className="p-2 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">{(currentPage - 1) * itemsPerPage + idx + 1}</td>
-                    <td className="p-2 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">{r.date_created || '-'}</td>
-                    <td className="p-2 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">{fmtTime(r.time_created)}</td>
-                    <td className="p-2 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">{r.user_full_name || r.username || '-'}</td>
-                    <td className="p-2 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">{r.username || '-'}</td>
-                    <td className="p-2 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">{r.role || '-'}</td>
-                    <td className="p-2 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">{renderActionBadge(r.action || r.log_activity)}</td>
-                    <td className="p-2 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px] max-w-[520px] truncate" title={r.description}>{r.description}</td>
+        {selectedTab === 'Reports' ? (
+          <>
+            <div className="max-h-[520px] overflow-y-auto">
+              <table className="w-full caption-bottom text-sm">
+                <thead className="[&_tr]:border-b">
+                  <tr className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground">#</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground">Title</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground">Type</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground">Generated By</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground">Date</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground">Time</th>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-        {rows.length > itemsPerPage && (
-          <div className="flex items-center justify-between p-4 border-t">
-            <div className="text-sm text-muted-foreground">
-              Showing {(currentPage - 1) * itemsPerPage + 1} – {Math.min(currentPage * itemsPerPage, rows.length)} of {rows.length}
+                </thead>
+                <tbody className="[&_tr:last-child]:border-0">
+                  {reportsLoading ? (
+                    <tr><td colSpan="6" className="p-4 text-center text-muted-foreground">Loading reports...</td></tr>
+                  ) : reports.length === 0 ? (
+                    <tr><td colSpan="6" className="p-4 text-center text-muted-foreground">No reports</td></tr>
+                  ) : (
+                    reports
+                      .slice((reportsPage - 1) * itemsPerPage, reportsPage * itemsPerPage)
+                      .map((r, idx) => (
+                        <tr key={`${r.type}-${r.movement_id || idx}`} className="border-b transition-colors hover:bg-muted/50">
+                          <td className="p-2">{(reportsPage - 1) * itemsPerPage + idx + 1}</td>
+                          <td className="p-2">{r.title}</td>
+                          <td className="p-2">{r.type}</td>
+                          <td className="p-2">{r.generatedBy || '-'}</td>
+                          <td className="p-2">{r.date || '-'}</td>
+                          <td className="p-2">{r.time || '-'}</td>
+                        </tr>
+                      ))
+                  )}
+                </tbody>
+              </table>
             </div>
-            <div className="flex items-center gap-2">
-              <button
-                className={`inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-8 px-3 ${currentPage === 1 ? 'opacity-50 cursor-not-allowed' : ''}`}
-                disabled={currentPage === 1}
-                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-              >
-                ← Prev
-              </button>
-              {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
-                <button
-                  key={page}
-                  onClick={() => setCurrentPage(page)}
-                  className={`inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input h-8 px-3 ${currentPage === page ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'bg-background hover:bg-accent hover:text-accent-foreground'}`}
-                >
-                  {page}
-                </button>
-              ))}
-              <button
-                className={`inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-8 px-3 ${currentPage === totalPages ? 'opacity-50 cursor-not-allowed' : ''}`}
-                disabled={currentPage === totalPages}
-                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-              >
-                Next →
-              </button>
+            {reports.length > itemsPerPage && (
+              <div className="flex items-center justify-between p-4 border-t">
+                <div className="text-sm text-muted-foreground">
+                  Showing {(reportsPage - 1) * itemsPerPage + 1} – {Math.min(reportsPage * itemsPerPage, reports.length)} of {reports.length}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    className={`inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-8 px-3 ${reportsPage === 1 ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    disabled={reportsPage === 1}
+                    onClick={() => setReportsPage(p => Math.max(1, p - 1))}
+                  >
+                    ← Prev
+                  </button>
+                  {Array.from({ length: Math.max(1, Math.ceil(reports.length / itemsPerPage)) }, (_, i) => i + 1).map(page => (
+                    <button
+                      key={page}
+                      onClick={() => setReportsPage(page)}
+                      className={`inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input h-8 px-3 ${reportsPage === page ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'bg-background hover:bg-accent hover:text-accent-foreground'}`}
+                    >
+                      {page}
+                    </button>
+                  ))}
+                  <button
+                    className={`inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-8 px-3 ${reportsPage === Math.max(1, Math.ceil(reports.length / itemsPerPage)) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    disabled={reportsPage === Math.max(1, Math.ceil(reports.length / itemsPerPage))}
+                    onClick={() => setReportsPage(p => Math.min(Math.max(1, Math.ceil(reports.length / itemsPerPage)), p + 1))}
+                  >
+                    Next →
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        ) : selectedTab === 'Movement History' ? (
+          <>
+            <div className="max-h-[520px] overflow-y-auto">
+              <table className="w-full caption-bottom text-sm">
+                <thead className="[&_tr]:border-b">
+                  <tr className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground">Product</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground">Type</th>
+                    <th className="h-10 px-2 text-right align-middle font-medium text-muted-foreground">Qty</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground">From</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground">To</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground">Moved By</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground">Date</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground">Time</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="[&_tr:last-child]:border-0">
+                  {movementLoading ? (
+                    <tr><td colSpan="9" className="p-4 text-center text-muted-foreground">Loading...</td></tr>
+                  ) : movementRows.length === 0 ? (
+                    <tr><td colSpan="9" className="p-4 text-center text-muted-foreground">No movement history</td></tr>
+                  ) : (
+                    movementRows
+                      .slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
+                      .map((r, idx) => (
+                        <tr key={`${r.id}-${idx}`} className="border-b transition-colors hover:bg-muted/50">
+                          <td className="p-2">{r.product_name}</td>
+                          <td className="p-2">{r.movementType}</td>
+                          <td className="p-2 text-right">{r.quantity}</td>
+                          <td className="p-2">{r.fromLocation}</td>
+                          <td className="p-2">{r.toLocation}</td>
+                          <td className="p-2">{r.movedBy}</td>
+                          <td className="p-2">{r.date}</td>
+                          <td className="p-2">{r.time}</td>
+                          <td className="p-2">{r.status}</td>
+                        </tr>
+                      ))
+                  )}
+                </tbody>
+              </table>
             </div>
-          </div>
+            {movementRows.length > itemsPerPage && (
+              <div className="flex items-center justify-between p-4 border-t">
+                <div className="text-sm text-muted-foreground">
+                  Showing {(currentPage - 1) * itemsPerPage + 1} – {Math.min(currentPage * itemsPerPage, movementRows.length)} of {movementRows.length}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    className={`inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-8 px-3 ${currentPage === 1 ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    disabled={currentPage === 1}
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  >
+                    ← Prev
+                  </button>
+                  {Array.from({ length: Math.max(1, Math.ceil(movementRows.length / itemsPerPage)) }, (_, i) => i + 1).map(page => (
+                    <button
+                      key={page}
+                      onClick={() => setCurrentPage(page)}
+                      className={`inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input h-8 px-3 ${currentPage === page ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'bg-background hover:bg-accent hover:text-accent-foreground'}`}
+                    >
+                      {page}
+                    </button>
+                  ))}
+                  <button
+                    className={`inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-8 px-3 ${currentPage === Math.max(1, Math.ceil(movementRows.length / itemsPerPage)) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    disabled={currentPage === Math.max(1, Math.ceil(movementRows.length / itemsPerPage))}
+                    onClick={() => setCurrentPage(p => Math.min(Math.max(1, Math.ceil(movementRows.length / itemsPerPage)), p + 1))}
+                  >
+                    Next →
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        ) : selectedTab === 'Transfer History' ? (
+          <>
+            <div className="max-h-[520px] overflow-y-auto">
+              <table className="w-full caption-bottom text-sm">
+                <thead className="[&_tr]:border-b">
+                  <tr className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground">Transfer #</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground">Date</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground">Time</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground">From</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground">To</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground">Moved By</th>
+                    <th className="h-10 px-2 text-right align-middle font-medium text-muted-foreground">Items</th>
+                    <th className="h-10 px-2 text-right align-middle font-medium text-muted-foreground">Total Qty</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="[&_tr:last-child]:border-0">
+                  {transferLoading ? (
+                    <tr><td colSpan="9" className="p-4 text-center text-muted-foreground">Loading...</td></tr>
+                  ) : transferRows.length === 0 ? (
+                    <tr><td colSpan="9" className="p-4 text-center text-muted-foreground">No transfer history</td></tr>
+                  ) : (
+                    transferRows
+                      .slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
+                      .map((r, idx) => (
+                        <tr key={`${r.id}-${idx}`} className="border-b transition-colors hover:bg-muted/50">
+                          <td className="p-2">TR-{r.id}</td>
+                          <td className="p-2">{r.date}</td>
+                          <td className="p-2">{r.time}</td>
+                          <td className="p-2">{r.fromLocation}</td>
+                          <td className="p-2">{r.toLocation}</td>
+                          <td className="p-2">{r.movedBy}</td>
+                          <td className="p-2 text-right">{r.itemsCount}</td>
+                          <td className="p-2 text-right">{r.totalQty}</td>
+                          <td className="p-2">{r.status}</td>
+                        </tr>
+                      ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+            {transferRows.length > itemsPerPage && (
+              <div className="flex items-center justify-between p-4 border-t">
+                <div className="text-sm text-muted-foreground">
+                  Showing {(currentPage - 1) * itemsPerPage + 1} – {Math.min(currentPage * itemsPerPage, transferRows.length)} of {transferRows.length}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    className={`inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-8 px-3 ${currentPage === 1 ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    disabled={currentPage === 1}
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  >
+                    ← Prev
+                  </button>
+                  {Array.from({ length: Math.max(1, Math.ceil(transferRows.length / itemsPerPage)) }, (_, i) => i + 1).map(page => (
+                    <button
+                      key={page}
+                      onClick={() => setCurrentPage(page)}
+                      className={`inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input h-8 px-3 ${currentPage === page ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'bg-background hover:bg-accent hover:text-accent-foreground'}`}
+                    >
+                      {page}
+                    </button>
+                  ))}
+                  <button
+                    className={`inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-8 px-3 ${currentPage === Math.max(1, Math.ceil(transferRows.length / itemsPerPage)) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    disabled={currentPage === Math.max(1, Math.ceil(transferRows.length / itemsPerPage))}
+                    onClick={() => setCurrentPage(p => Math.min(Math.max(1, Math.ceil(transferRows.length / itemsPerPage)), p + 1))}
+                  >
+                    Next →
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="max-h-[520px] overflow-y-auto">
+              <table className="w-full caption-bottom text-sm">
+                <thead className="[&_tr]:border-b">
+                  <tr className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">#</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">Date</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">Time</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">User</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">Username</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">Role</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">Action</th>
+                    <th className="h-10 px-2 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">Description</th>
+                  </tr>
+                </thead>
+                <tbody className="[&_tr:last-child]:border-0">
+                  {loading ? (
+                    <tr className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
+                      <td colSpan="8" className="p-4 text-center text-muted-foreground">Loading...</td>
+                    </tr>
+                  ) : filteredByTab.length === 0 ? (
+                    <tr className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
+                      <td colSpan="8" className="p-4 text-center text-muted-foreground">No logs</td>
+                    </tr>
+                  ) : (
+                    paged.map((r, idx) => (
+                      <tr key={`${r.date_created}-${r.time_created}-${idx}`} className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
+                        <td className="p-2 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">{(currentPage - 1) * itemsPerPage + idx + 1}</td>
+                        <td className="p-2 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">{r.date_created || '-'}</td>
+                        <td className="p-2 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">{fmtTime(r.time_created)}</td>
+                        <td className="p-2 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">{r.user_full_name || r.username || '-'}</td>
+                        <td className="p-2 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">{r.username || '-'}</td>
+                        <td className="p-2 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">{r.role || '-'}</td>
+                        <td className="p-2 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]">{renderActionBadge(r.action || r.log_activity)}</td>
+                        <td className="p-2 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px] max-w-[520px] truncate" title={r.description}>{r.description}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+            {filteredByTab.length > itemsPerPage && (
+              <div className="flex items-center justify-between p-4 border-t">
+                <div className="text-sm text-muted-foreground">
+                  Showing {(currentPage - 1) * itemsPerPage + 1} – {Math.min(currentPage * itemsPerPage, filteredByTab.length)} of {filteredByTab.length}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    className={`inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-8 px-3 ${currentPage === 1 ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    disabled={currentPage === 1}
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  >
+                    ← Prev
+                  </button>
+                  {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
+                    <button
+                      key={page}
+                      onClick={() => setCurrentPage(page)}
+                      className={`inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input h-8 px-3 ${currentPage === page ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'bg-background hover:bg-accent hover:text-accent-foreground'}`}
+                    >
+                      {page}
+                    </button>
+                  ))}
+                  <button
+                    className={`inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-8 px-3 ${currentPage === totalPages ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    disabled={currentPage === totalPages}
+                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  >
+                    Next →
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

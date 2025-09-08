@@ -1240,6 +1240,25 @@ function InventoryTransfer() {
       console.log("📥 Transfer creation response:", response)
 
       if (response.success) {
+        // Log the transfer activity with user context
+        try {
+          const userData = JSON.parse(sessionStorage.getItem('user_data') || '{}');
+          await fetch('http://localhost/Enguio_Project/Api/backend.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'log_activity',
+              activity_type: 'INVENTORY_TRANSFER_CREATED',
+              description: `Transfer created from ${transferInfo.sourceLocation} to ${transferInfo.destinationLocation}: ${selectedProducts.length} products`,
+              table_name: 'tbl_transfer_header',
+              record_id: response.transfer_header_id,
+              user_id: userData.user_id || userData.emp_id,
+              username: userData.username,
+              role: userData.role,
+            }),
+          });
+        } catch (_) {}
+        
         const transferredCount = response.products_transferred || 0;
         
         console.log("✅ Transfer successful!")
@@ -1439,6 +1458,21 @@ function InventoryTransfer() {
       })
 
       if (response.success) {
+        // Log the transfer deletion
+        try {
+          await fetch('http://localhost/Enguio_Project/Api/backend.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'log_activity',
+              activity_type: 'INVENTORY_TRANSFER_DELETED',
+              description: `Transfer deleted (ID: ${transferId})`,
+              table_name: 'tbl_transfer_header',
+              record_id: transferId,
+            }),
+          });
+        } catch (_) {}
+        
         toast.success("Transfer deleted successfully")
         loadTransfers()
         setShowDeleteModal(false)
@@ -1447,6 +1481,21 @@ function InventoryTransfer() {
         toast.error(response.message || "Failed to delete transfer")
       }
     } catch (error) {
+      // Log the error
+      try {
+        await fetch('http://localhost/Enguio_Project/Api/backend.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'log_activity',
+            activity_type: 'INVENTORY_TRANSFER_DELETE_ERROR',
+            description: `Failed to delete transfer ID ${transferId}: ${error.message}`,
+            table_name: 'tbl_transfer_header',
+            record_id: transferId,
+          }),
+        });
+      } catch (_) {}
+      
       console.error("Error deleting transfer:", error)
       toast.error("Failed to delete transfer")
     }

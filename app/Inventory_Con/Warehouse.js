@@ -165,8 +165,45 @@ async function updateProductStock(productId, newQuantity, batchReference = "", e
       new_srp: newSrp,
       entry_by: entryBy
     });
+    
+    // Log the stock update activity with user context
+    if (response.success) {
+      try {
+        const userData = JSON.parse(sessionStorage.getItem('user_data') || '{}');
+        await fetch('http://localhost/Enguio_Project/Api/backend.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'log_activity',
+            activity_type: 'WAREHOUSE_STOCK_UPDATED',
+            description: `Warehouse stock updated: Product ID ${productId}, Quantity: ${newQuantity}, Batch: ${batchReference || 'N/A'}`,
+            table_name: 'tbl_products',
+            record_id: productId,
+            user_id: userData.user_id || userData.emp_id,
+            username: userData.username,
+            role: userData.role,
+          }),
+        });
+      } catch (_) {}
+    }
+    
     return response;
   } catch (error) {
+    // Log the error
+    try {
+      await fetch('http://localhost/Enguio_Project/Api/backend.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'log_activity',
+          activity_type: 'WAREHOUSE_STOCK_UPDATE_ERROR',
+          description: `Failed to update warehouse stock for Product ID ${productId}: ${error.message}`,
+          table_name: 'tbl_products',
+          record_id: productId,
+        }),
+      });
+    } catch (_) {}
+    
     console.error("Error updating product stock:", error);
     return { success: false, error: error.message };
   }
